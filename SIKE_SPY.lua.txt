@@ -1,0 +1,120 @@
+--// ============================================================
+--//  SIKE HUB · SPY (ghi log remote ra file)
+--//  Cach dung: chay script -> lam thao tac trong game (danh quai,
+--//  nhan quest, mua chip, di raid...) -> het gio tu luu file.
+--//  Y tuong hoc tu SimpleSpy/Hydroxide nhung toi gian cho Blox Fruits:
+--//  khong GUI nang, log thang vao file de dem ve phan tich.
+--// ============================================================
+
+-- cau hinh nhanh o day
+local DURATION = 180   -- ghi log bao nhieu giay (180 = 3 phut)
+local MAX_LOGS = 500   -- qua so dong nay thi tu luu + dung som
+
+if not hookmetamethod then
+    print("[SIKE SPY] ✘ Executor khong ho tro hookmetamethod - khong spy duoc.")
+    return
+end
+if _G.__SIKE_SPY_RUNNING then
+    print("[SIKE SPY] Dang chay roi, doi no tu luu file.")
+    return
+end
+_G.__SIKE_SPY_RUNNING = true
+
+local RS = game:GetService("ReplicatedStorage")
+
+-- ---------- serialize args an toan ----------
+local function ser(v, depth, seen)
+    depth = depth or 0
+    seen = seen or {}
+    local t = typeof(v)
+    if t == "string" then return string.format("%q", v):sub(1, 120)
+    elseif t == "number" or t == "boolean" or t == "nil" then return tostring(v)
+    elseif t == "CFrame" then local p = v.Position return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+    elseif t == "Vector3" then return string.format("V3(%.1f,%.1f,%.1f)", v.X, v.Y, v.Z)
+    elseif t == "Vector2" then return string.format("V2(%.1f,%.1f)", v.X, v.Y)
+    elseif t == "Color3" then return string.format("C3(%d,%d,%d)", v.R * 255, v.G * 255, v.B * 255)
+    elseif t == "EnumItem" then return tostring(v)
+    elseif t == "Instance" then
+        local ok, n = pcall(function() return v:GetFullName() end)
+        return "INST:" .. (ok and n or v.ClassName)
+    elseif t == "table" then
+        if seen[v] then return "{...}"
+        elseif depth >= 3 then return "{...}"
+        end
+        seen[v] = true
+        local parts, n = {}, 0
+        for k, val in pairs(v) do
+            n = n + 1
+            if n > 8 then table.insert(parts, "...") break end
+            table.insert(parts, "[" .. ser(k, depth + 1, seen) .. "]=" .. ser(val, depth + 1, seen))
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    elseif t == "function" then return "FUNC"
+    else return t .. ":" .. tostring(v):sub(1, 60)
+    end
+end
+
+-- ---------- log ----------
+local logs, counts = {}, {}
+local t0 = os.clock()
+local fname = string.format("SIKE_spy_%d_%s.txt", game.PlaceId, os.date("%Y%m%d_%H%M%S"))
+
+local function save()
+    local out = {
+        "SIKE SPY LOG - " .. os.date("%Y-%m-%d %H:%M:%S") .. " - place " .. game.PlaceId,
+        "tong so call: " .. #logs, "",
+    }
+    for _, l in ipairs(logs) do table.insert(out, l) end
+    table.insert(out, "")
+    table.insert(out, "===== THONG KE (remote x method : so lan) =====")
+    local ks = {}
+    for k in pairs(counts) do table.insert(ks, k) end
+    table.sort(ks)
+    for _, k in ipairs(ks) do table.insert(out, counts[k] .. "x  " .. k) end
+    local content = table.concat(out, "\n")
+    if writefile then
+        pcall(writefile, fname, content)
+        print("[SIKE SPY] ✔ Da luu " .. fname .. " (" .. #logs .. " dong)")
+    else
+        print("[SIKE SPY] (khong co writefile) in 30 dong dau:")
+        for i = 1, math.min(30, #logs) do print(logs[i]) end
+    end
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "SIKE SPY", Text = "Da luu " .. fname, Duration = 6,
+        })
+    end)
+end
+
+print(string.format("[SIKE SPY] Bat dau ghi %ds - lam gi trong game di bro!", DURATION))
+local old
+old = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    if (method == "InvokeServer" or method == "FireServer") and typeof(self) == "Instance" then
+        local ok, isRS = pcall(function() return self:IsDescendantOf(RS) end)
+        if ok and isRS then
+            local args = { ... }
+            local parts = {}
+            for i, a in ipairs(args) do
+                if i > 6 then table.insert(parts, "...") break end
+                table.insert(parts, ser(a))
+            end
+            local path = self:GetFullName()
+            counts[path .. " | " .. method] = (counts[path .. " | " .. method] or 0) + 1
+            table.insert(logs, string.format("[+%.1fs] %s | %s(%s)", os.clock() - t0, path, method, table.concat(parts, ", ")))
+            if #logs >= MAX_LOGS then
+                print("[SIKE SPY] Du " .. MAX_LOGS .. " dong - luu som.")
+                task.spawn(function()
+                    save()
+                    _G.__SIKE_SPY_RUNNING = false
+                end)
+            end
+        end
+    end
+    return old(self, ...)
+end)
+
+task.delay(DURATION, function()
+    save()
+    _G.__SIKE_SPY_RUNNING = false
+end)
